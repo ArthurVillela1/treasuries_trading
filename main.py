@@ -39,3 +39,38 @@ yields["2s30s"] = yields["30Y"] - yields["2Y"]
 yields = yields.dropna()
 print(yields.head())
 print(yields.tail())
+
+from sklearn.decomposition import PCA
+import pandas as pd
+
+maturities = [
+    "3M", "6M", "1Y", "2Y", "3Y",
+    "5Y", "7Y", "10Y", "20Y", "30Y"
+]
+
+changes = yields[maturities].diff().dropna() * 100
+
+window = 504
+
+residuals = pd.DataFrame(
+    index=changes.index,
+    columns=maturities
+)
+
+for i in range(window, len(changes)):
+
+    train = changes.iloc[i-window:i]
+    today = changes.iloc[[i]]
+
+    pca = PCA(n_components=3)
+    pca.fit(train)
+
+    expected = pca.inverse_transform(
+        pca.transform(today)
+    )
+
+    residuals.iloc[i] = today.values[0] - expected[0]
+
+residuals = residuals.dropna()
+
+print(residuals.tail())
