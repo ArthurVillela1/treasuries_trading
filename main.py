@@ -32,4 +32,10 @@ yields.columns = [
     "30Y"
 ]
 
+yields["2s10s"] = yields["10Y"] - yields["2Y"]
+yields["5s30s"] = yields["30Y"] - yields["5Y"]
+yields["2s30s"] = yields["30Y"] - yields["2Y"]
+
+yields = yields.dropna()
+print(yields.head())
 print(yields.tail())
