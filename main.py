@@ -4,9 +4,6 @@ from pandas_datareader import data as web
 # Import PCA
 from sklearn.decomposition import PCA
 
-# Import OLS regression tools
-from statsmodels.api import OLS, add_constant
-
 # Import pandas
 import pandas as pd
 
@@ -128,4 +125,14 @@ residuals = residuals.dropna()
 print("\nLatest PCA residuals:")
 print(residuals.tail())
 
+# Calculate the historical mean residual for each maturity
+mean = residuals.mean()
 
+# Calculate the historical standard deviation for each maturity
+std = residuals.std()
+
+# Calculate the z-score of the latest residual for every maturity
+z_scores = (residuals.iloc[-1] - mean) / std
+
+# Display the z-scores
+print(z_scores)
