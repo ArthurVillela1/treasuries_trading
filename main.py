@@ -129,28 +129,3 @@ print("\nLatest PCA residuals:")
 print(residuals.tail())
 
 
-# Select the 6M maturity for the predictability test
-maturity = "6M"
-
-
-# Match today's residual with the following day's residual
-df = pd.DataFrame({
-    "residual_today": residuals[maturity],
-    "residual_tomorrow": residuals[maturity].shift(-1)
-}).dropna()
-
-
-# Use today's residual as the explanatory variable and add an intercept
-X = add_constant(df["residual_today"])
-
-# Use tomorrow's residual as the dependent variable
-y = df["residual_tomorrow"]
-
-
-# Estimate the relationship between today's and tomorrow's residual
-model = OLS(y, X).fit()
-
-
-# Display the regression results
-print("\n6M residual regression:")
-print(model.summary())
