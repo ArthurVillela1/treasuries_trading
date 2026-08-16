@@ -160,8 +160,8 @@ maturity = "6M"
 # Create trading signals from the rolling z-score
 signal = pd.Series(0, index=z_scores.index)
 
-signal[z_scores[maturity] > 2] = -1
-signal[z_scores[maturity] < -2] = 1
+signal[z_scores[maturity] > 1.5] = -1
+signal[z_scores[maturity] < -1.5] = 1
 
 # Use tomorrow's PCA residual as the outcome
 next_residual = residuals[maturity].shift(-1)
