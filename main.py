@@ -52,25 +52,14 @@ yields.columns = [
 ]
 
 
-# Calculate the 2Y-10Y curve spread
+# Calculate common curve spreads
 yields["2s10s"] = yields["10Y"] - yields["2Y"]
-
-# Calculate the 5Y-30Y curve spread
 yields["5s30s"] = yields["30Y"] - yields["5Y"]
-
-# Calculate the 2Y-30Y curve spread
 yields["2s30s"] = yields["30Y"] - yields["2Y"]
 
 
 # Remove rows containing missing values
 yields = yields.dropna()
-
-
-# Display the first five observations
-print(yields.head())
-
-# Display the latest five observations
-print(yields.tail())
 
 
 # Define the maturities used in PCA
@@ -96,7 +85,7 @@ residuals = pd.DataFrame(
 )
 
 
-# Repeat the PCA estimation for every day after the initial window
+# Run rolling PCA
 for i in range(window, len(changes)):
 
     # Select the previous 504 trading days
@@ -106,76 +95,103 @@ for i in range(window, len(changes)):
     today = changes.iloc[[i]]
 
     # Create a PCA model with three factors
+    # Which combinations of maturities explain most of the variation in this dataset?
     pca = PCA(n_components=3)
 
-    # Estimate the PCA factors using the previous 504 days
-    # Which combinations of maturities explain most of the variation in this dataset?
+    # Estimate the PCA factors
     pca.fit(train)
 
-    # Reconstruct today's yield changes using the three PCA factors
+    # Reconstruct today's yield changes using the three factors
     expected = pca.inverse_transform(
         pca.transform(today)
     )
 
-    # Calculate actual minus PCA-reconstructed yield changes
+    # Calculate actual minus PCA-reconstructed changes
     residuals.iloc[i] = (
         today.values[0] - expected[0]
     )
 
 
-# Remove the initial rows where residuals could not be calculated
+# Remove rows where PCA residuals were unavailable
 residuals = residuals.dropna()
-
-
-# Display the latest PCA residuals
-print("\nLatest PCA residuals:")
-print(residuals.tail())
 
 
 # Use the previous 252 trading days to define the normal residual range
 z_window = 252
 
 
-# Calculate the rolling mean using only previous observations
+# Calculate rolling mean using only previous observations
 mean = residuals.rolling(z_window).mean().shift(1)
 
-# Calculate the rolling standard deviation using only previous observations
+# Calculate rolling standard deviation using only previous observations
 std = residuals.rolling(z_window).std().shift(1)
 
-# Calculate rolling residual z-scores
+# Calculate rolling z-scores
 z_scores = (residuals - mean) / std
 
 
-# Display the latest five z-score observations
-print("\nLatest rolling z-scores:")
-print(z_scores.tail())
+# Set the trading threshold
+threshold = 1.5
 
 
-# Display the latest z-score for every maturity
+# Create signals for every maturity
+signals = pd.DataFrame(
+    0,
+    index=z_scores.index,
+    columns=maturities
+)
+
+
+# Positive residual: expect reversal downward
+signals[z_scores > threshold] = -1 # Short position
+
+# Negative residual: expect reversal upward
+signals[z_scores < -threshold] = 1 # Long position
+
+
+# Move next day's residuals onto today's row
+next_residuals = residuals.shift(-1)
+
+
+# Calculate signal performance for every maturity
+strategy = signals * next_residuals
+
+
+# Keep only observations where a trade occurred
+trade_results = strategy.where(signals != 0).stack()
+
+
+# Display current z-scores
 print("\nCurrent z-scores:")
 print(z_scores.iloc[-1])
 
-# Select the maturity to test
-maturity = "6M"
 
-# Create trading signals from the rolling z-score
-signal = pd.Series(0, index=z_scores.index)
+# Display current signals
+print("\nCurrent signals:")
+print(signals.iloc[-1])
 
-signal[z_scores[maturity] > 1.5] = -1 # short position
-signal[z_scores[maturity] < -1.5] = 1 # long position
 
-# Use tomorrow's PCA residual as the outcome
-# shift(-1) moves tomorrow’s value onto today’s row.
-next_residual = residuals[maturity].shift(-1)
+# Display aggregate backtest results
+print("\nBacktest results:")
+print("Number of trades:", len(trade_results))
+print("Average result:", trade_results.mean(), "bp")
+print("Total result:", trade_results.sum(), "bp")
+print("Win rate:", (trade_results > 0).mean())
 
-# Calculate the return of the signal in residual basis points
-strategy = signal * next_residual # a long position profits if the next residual is positive, and loses if it is negative
 
-# Remove observations without a following day
-strategy = strategy.dropna()
+# Display results by maturity
+print("\nResults by maturity:")
 
-# Display results
-print("Number of trades:", (signal != 0).sum())
-print("Average result:", strategy[signal != 0].mean(), "bp")
-print("Total result:", strategy.sum(), "bp")
-print("Win rate:", (strategy[signal != 0] > 0).mean())
+for maturity in maturities:
+
+    maturity_results = strategy[maturity][
+        signals[maturity] != 0
+    ].dropna()
+
+    print(
+        maturity,
+        "| Trades:", len(maturity_results),
+        "| Average:", round(maturity_results.mean(), 3), "bp",
+        "| Total:", round(maturity_results.sum(), 3), "bp",
+        "| Win rate:", round((maturity_results > 0).mean(), 3)
+    )
