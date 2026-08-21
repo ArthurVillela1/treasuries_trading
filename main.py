@@ -109,6 +109,7 @@ for i in range(window, len(changes)):
     pca = PCA(n_components=3)
 
     # Estimate the PCA factors using the previous 504 days
+    # Which combinations of maturities explain most of the variation in this dataset?
     pca.fit(train)
 
     # Reconstruct today's yield changes using the three PCA factors
@@ -160,14 +161,15 @@ maturity = "6M"
 # Create trading signals from the rolling z-score
 signal = pd.Series(0, index=z_scores.index)
 
-signal[z_scores[maturity] > 1.5] = -1
-signal[z_scores[maturity] < -1.5] = 1
+signal[z_scores[maturity] > 1.5] = -1 # short position
+signal[z_scores[maturity] < -1.5] = 1 # long position
 
 # Use tomorrow's PCA residual as the outcome
+# shift(-1) moves tomorrow’s value onto today’s row.
 next_residual = residuals[maturity].shift(-1)
 
 # Calculate the return of the signal in residual basis points
-strategy = signal * next_residual
+strategy = signal * next_residual # a long position profits if the next residual is positive, and loses if it is negative
 
 # Remove observations without a following day
 strategy = strategy.dropna()
