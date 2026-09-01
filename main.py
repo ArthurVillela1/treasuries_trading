@@ -1,197 +1,201 @@
-# Import FRED data reader
-from pandas_datareader import data as web
-
-# Import PCA
-from sklearn.decomposition import PCA
-
-# Import pandas
+import numpy as np
 import pandas as pd
+from pandas_datareader import data as web
+from scipy.optimize import minimize_scalar
 
-# Import date tools
-import datetime
+# --------------------------------------------------
+# 1. LOAD TREASURY YIELDS
+# --------------------------------------------------
 
+series = {
+    "3M": "DGS3MO",
+    "6M": "DGS6MO",
+    "1Y": "DGS1",
+    "2Y": "DGS2",
+    "3Y": "DGS3",
+    "5Y": "DGS5",
+    "7Y": "DGS7",
+    "10Y": "DGS10",
+    "20Y": "DGS20",
+    "30Y": "DGS30"
+}
 
-# Set the start date
-start = datetime.datetime(2010, 1, 1)
+Y = web.DataReader(
+    list(series.values()),
+    "fred",
+    "2005-01-01"
+)
 
-# Set the end date to today
-end = datetime.datetime.today()
+Y.columns = series.keys()
+Y = Y.dropna()
 
-
-# Define the FRED Treasury yield series
-series = [
-    "DGS3MO",
-    "DGS6MO",
-    "DGS1",
-    "DGS2",
-    "DGS3",
-    "DGS5",
-    "DGS7",
-    "DGS10",
-    "DGS20",
-    "DGS30"
-]
-
-
-# Download the yield data from FRED
-yields = web.DataReader(series, "fred", start, end)
-
-
-# Rename the columns by maturity
-yields.columns = [
-    "3M",
-    "6M",
-    "1Y",
-    "2Y",
-    "3Y",
-    "5Y",
-    "7Y",
-    "10Y",
-    "20Y",
-    "30Y"
-]
+tau = np.array([0.25, 0.5, 1, 2, 3, 5, 7, 10, 20, 30])
 
 
-# Calculate common curve spreads
-yields["2s10s"] = yields["10Y"] - yields["2Y"]
-yields["5s30s"] = yields["30Y"] - yields["5Y"]
-yields["2s30s"] = yields["30Y"] - yields["2Y"]
+# --------------------------------------------------
+# 2. NELSON-SIEGEL CURVE
+# --------------------------------------------------
+
+def loadings(lam):
+    slope = (1 - np.exp(-lam * tau)) / (lam * tau)
+    curvature = slope - np.exp(-lam * tau)
+
+    return np.column_stack([
+        np.ones(len(tau)),
+        slope,
+        curvature
+    ])
 
 
-# Remove rows containing missing values
-yields = yields.dropna()
+def fit_curve(y, lam):
+    L = loadings(lam)
+
+    beta = np.linalg.lstsq(
+        L,
+        y,
+        rcond=None
+    )[0]
+
+    fitted = L @ beta
+
+    return beta, fitted
 
 
-# Define the maturities used in PCA
-maturities = [
-    "3M", "6M", "1Y", "2Y", "3Y",
-    "5Y", "7Y", "10Y", "20Y", "30Y"
-]
+# Choose lambda from the first half of the sample
+
+train = Y.iloc[:len(Y)//2]
+
+def objective(lam):
+    error = 0
+
+    for y in train.values:
+        _, fitted = fit_curve(y, lam)
+        error += np.sum((y - fitted) ** 2)
+
+    return error
 
 
-# Calculate daily yield changes in basis points
-changes = yields[maturities].diff().dropna() * 100
+lam = minimize_scalar(
+    objective,
+    bounds=(0.01, 3),
+    method="bounded"
+).x
 
 
-# Use approximately two years of data for each PCA estimation
-window = 504
+# --------------------------------------------------
+# 3. ESTIMATE DAILY CURVE FACTORS
+# --------------------------------------------------
 
+L = loadings(lam)
 
-# Create an empty DataFrame to store PCA residuals
-residuals = pd.DataFrame(
-    index=changes.index,
-    columns=maturities,
-    dtype=float
+factors = []
+
+for y in Y.values:
+    beta, _ = fit_curve(y, lam)
+    factors.append(beta)
+
+F = pd.DataFrame(
+    factors,
+    index=Y.index,
+    columns=["Level", "Slope", "Curvature"]
 )
 
 
-# Run rolling PCA
-for i in range(window, len(changes)):
+# --------------------------------------------------
+# 4. MODEL FACTOR DYNAMICS
+# --------------------------------------------------
 
-    # Select the previous 504 trading days
-    train = changes.iloc[i-window:i]
+# F_t = c + A F_(t-1) + error
 
-    # Select the current day's yield changes
-    today = changes.iloc[[i]]
+X = np.column_stack([
+    np.ones(len(F) - 1),
+    F.shift(1).dropna().values
+])
 
-    # Create a PCA model with three factors
-    # Which combinations of maturities explain most of the variation in this dataset?
-    pca = PCA(n_components=3)
+target = F.iloc[1:].values
 
-    # Estimate the PCA factors
-    pca.fit(train)
+coef = np.linalg.lstsq(
+    X,
+    target,
+    rcond=None
+)[0]
 
-    # Reconstruct today's yield changes using the three factors
-    expected = pca.inverse_transform(
-        pca.transform(today)
-    )
-
-    # Calculate actual minus PCA-reconstructed changes
-    residuals.iloc[i] = (
-        today.values[0] - expected[0]
-    )
+c = coef[0]
+A = coef[1:].T
 
 
-# Remove rows where PCA residuals were unavailable
-residuals = residuals.dropna()
+# --------------------------------------------------
+# 5. ONE-STEP-AHEAD FITTED CURVE
+# --------------------------------------------------
+
+predicted_factors = (
+    c
+    + F.shift(1).values @ A.T
+)
+
+predicted_factors = pd.DataFrame(
+    predicted_factors,
+    index=F.index,
+    columns=F.columns
+)
+
+fitted_yields = pd.DataFrame(
+    predicted_factors.values @ L.T,
+    index=Y.index,
+    columns=Y.columns
+)
 
 
-# Use the previous 252 trading days to define the normal residual range
-z_window = 252
+# --------------------------------------------------
+# 6. RESIDUALS
+# --------------------------------------------------
+
+residuals = Y - fitted_yields
 
 
-# Calculate rolling mean using only previous observations
-mean = residuals.rolling(z_window).mean().shift(1)
+# --------------------------------------------------
+# 7. Z-SCORES
+# --------------------------------------------------
 
-# Calculate rolling standard deviation using only previous observations
-std = residuals.rolling(z_window).std().shift(1)
+mean = residuals.rolling(252).mean().shift(1)
+std = residuals.rolling(252).std().shift(1)
 
-# Calculate rolling z-scores
-z_scores = (residuals - mean) / std
-
-
-# Set the trading threshold
-threshold = 1.5
+z = (residuals - mean) / std
 
 
-# Create signals for every maturity
+# --------------------------------------------------
+# 8. SIGNALS
+# --------------------------------------------------
+
+# Positive residual:
+# yield too high -> bond relatively cheap -> long
+
+# Negative residual:
+# yield too low -> bond relatively rich -> short
+
 signals = pd.DataFrame(
     0,
-    index=z_scores.index,
-    columns=maturities
+    index=Y.index,
+    columns=Y.columns
 )
 
-
-# Positive residual: expect reversal downward
-signals[z_scores > threshold] = -1 # Short position
-
-# Negative residual: expect reversal upward
-signals[z_scores < -threshold] = 1 # Long position
+signals[z > 1.5] = 1
+signals[z < -1.5] = -1
 
 
-# Move next day's residuals onto today's row
-next_residuals = residuals.shift(-1)
+# --------------------------------------------------
+# 9. SIMPLE BACKTEST
+# --------------------------------------------------
 
+yield_change_bp = Y.diff() * 100
 
-# Calculate signal performance for every maturity
-strategy = signals * next_residuals
+# Long bond benefits when yield falls,
+# hence the minus sign.
 
+returns = (
+    -signals.shift(1)
+    * yield_change_bp
+)
 
-# Keep only observations where a trade occurred
-trade_results = strategy.where(signals != 0).stack()
-
-
-# Display current z-scores
-print("\nCurrent z-scores:")
-print(z_scores.iloc[-1])
-
-
-# Display current signals
-print("\nCurrent signals:")
-print(signals.iloc[-1])
-
-
-# Display aggregate backtest results
-print("\nBacktest results:")
-print("Number of trades:", len(trade_results))
-print("Average result:", trade_results.mean(), "bp")
-print("Total result:", trade_results.sum(), "bp")
-print("Win rate:", (trade_results > 0).mean())
-
-
-# Display results by maturity
-print("\nResults by maturity:")
-
-for maturity in maturities:
-
-    maturity_results = strategy[maturity][
-        signals[maturity] != 0
-    ].dropna()
-
-    print(
-        maturity,
-        "| Trades:", len(maturity_results),
-        "| Average:", round(maturity_results.mean(), 3), "bp",
-        "| Total:", round(maturity_results.sum(), 3), "bp",
-        "| Win rate:", round((maturity_results > 0).mean(), 3)
-    )
+print("Cumulative yield-space return by maturity:")
+print(returns.sum().round(2))
