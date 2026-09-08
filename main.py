@@ -136,17 +136,25 @@ A = coef[1:].T
 # 5. ONE-STEP-AHEAD FITTED CURVE
 # --------------------------------------------------
 
+# Predicts today's Level, Slope and Curvature using yesterday's Level, Slope and Curvature.
+# F = actual Level, Slope and Curvature for every day.
+# .shift(1) = moves them down one day, so we're using yesterday's factors.
+# .values = converts the DataFrame to a NumPy array.
+# @ = matrix multiplication.
+# A.T = coefficients describing how yesterday's factors predict today's factors.
 predicted_factors = (
     c
     + F.shift(1).values @ A.T
 )
 
+# Converting predicted_factors from a NumPy array back into a DataFrame with the same index and columns as F.
 predicted_factors = pd.DataFrame(
     predicted_factors,
     index=F.index,
     columns=F.columns
 )
 
+# Convert the 3 predicted factors into 10 predicted yields
 fitted_yields = pd.DataFrame(
     predicted_factors.values @ L.T,
     index=Y.index,
