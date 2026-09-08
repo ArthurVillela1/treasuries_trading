@@ -98,6 +98,7 @@ for y in Y.values:
     beta, _ = fit_curve(y, lam)
     factors.append(beta)
 
+# Put the estimated daily factors into a DataFrame with the same index as Y and columns for Level, Slope, and Curvature
 F = pd.DataFrame(
     factors,
     index=Y.index,
@@ -109,20 +110,23 @@ F = pd.DataFrame(
 # 4. MODEL FACTOR DYNAMICS
 # --------------------------------------------------
 
-# F_t = c + A F_(t-1) + error
+# Using the estimated daily factors to estimate the relationship between today's and yesterday's factors
+# Goal: estimate c and A in the following equation: F_t = c + A F_(t-1) + error
 
 X = np.column_stack([
+    # Column of ones as inputs to estimate the intercept c
     np.ones(len(F) - 1),
     F.shift(1).dropna().values
 ])
 
 target = F.iloc[1:].values
 
+# Runs a least-squares regression and stores the resulting coefficients in coef
 coef = np.linalg.lstsq(
     X,
     target,
     rcond=None
-)[0]
+)[0] # Selects the estimated coefficients
 
 c = coef[0]
 A = coef[1:].T
