@@ -49,37 +49,41 @@ def loadings(lam):
 
 def fit_curve(y, lam):
     L = loadings(lam)
-
+    
+    # OLS: finding the three values of beta that make the Nelson–Siegel curve fit the 10 observed yields as closely as possible
     beta = np.linalg.lstsq(
         L,
         y,
         rcond=None
     )[0]
 
+    # @ for matrix multiplication, L is 10x3 and beta is 3x1, so fitted is 10x1
     fitted = L @ beta
 
     return beta, fitted
 
 
-# Choose lambda from the first half of the sample
-
+# Takes the first half of your Treasury yield dataset and calls it train
 train = Y.iloc[:len(Y)//2]
 
+# Calculates the total squared yield-curve fitting error for a given λ
 def objective(lam):
     error = 0
 
     for y in train.values:
+
+        # Fit Nelson–Siegel curve and ignore the factors (beta) that are returned, only keep the fitted yields
         _, fitted = fit_curve(y, lam)
         error += np.sum((y - fitted) ** 2)
 
     return error
 
-
+# Runs objective function for many λ values and finds the one that minimizes the total squared yield-curve fitting error
 lam = minimize_scalar(
     objective,
     bounds=(0.01, 3),
     method="bounded"
-).x
+).x # extracts specifically the value of λ that produced the minimum error.
 
 
 # --------------------------------------------------
